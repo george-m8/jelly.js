@@ -1,0 +1,54 @@
+/*
+  textEffects — character animation styles
+  ─────────────────────────────────────────
+  Include this file if you prefer external CSS over the auto-injected styles.
+  The JS library injects an identical <style> block automatically, so this
+  file is optional — useful if you want to customise transitions project-wide.
+
+  All colour values use CSS custom properties. Define these in your :root or
+  override them per-element. Fallback values are provided for standalone use.
+*/
+
+.char {
+  display: inline-block;
+  transition:
+    font-weight  0.15s ease,
+    transform    0.15s ease,
+    text-shadow  0.20s ease,
+    color        0.20s ease,
+    filter       0.15s ease;
+}
+
+/* ── Effects ─────────────────────────────────────────────────────────────── */
+
+.char-weight {
+  font-weight: 900;
+}
+
+.char-drift {
+  transform: translateY(-4px);
+}
+
+.char-shadow {
+  text-shadow: 0 0 12px var(--colour-accent, #e81010);
+}
+
+.char-blur {
+  filter: blur(1.5px);
+}
+
+.char-scale {
+  transform: scale(1.2);
+}
+
+/*
+  The 'flash' effect sets colour via inline style (JS picks randomly from
+  --colour-accent, --colour-accent-alt, --colour-flash-red), so there's no
+  CSS class for it. Define those variables in your :root:
+
+  :root {
+    --colour-accent:     #e81010;
+    --colour-accent-alt: #ff4040;
+    --colour-flash-red:  #ff3e3e;
+  }
+*/

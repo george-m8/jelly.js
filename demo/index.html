@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>textEffects — demo</title>
+  <style>
+    :root {
+      --colour-accent:     #e81010;
+      --colour-accent-alt: #ff6600;
+      --colour-flash-red:  #ff3e3e;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: sans-serif;
+      background: #fff;
+      color: #111;
+      padding: 4rem 2rem;
+      max-width: 720px;
+      margin: 0 auto;
+    }
+
+    small { font-size: 0.7rem; letter-spacing: 0.15em; text-transform: uppercase; color: #999; }
+
+    h1 {
+      font-size: clamp(3rem, 10vw, 6rem);
+      line-height: 1.1;
+      margin: 1rem 0 2.5rem;
+    }
+
+    h2 {
+      font-size: 2rem;
+      margin: 2rem 0 0.5rem;
+    }
+
+    p { color: #555; line-height: 1.7; max-width: 60ch; margin-bottom: 1rem; }
+
+    .controls { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 2rem 0; }
+
+    button {
+      font-family: sans-serif;
+      font-size: 0.7rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 0.4rem 0.8rem;
+      border: 1px solid #111;
+      background: #fff;
+      cursor: pointer;
+    }
+    button:hover { background: #111; color: #fff; }
+    button.active { background: #111; color: #fff; }
+  </style>
+</head>
+<body>
+
+  <small>textEffects — demo</small>
+
+  <!-- data-reactive="true" marks this element for char-splitting and animation -->
+  <h1 data-reactive="true">Cool Bike Club</h1>
+
+  <!-- data-effects limits which effects this element uses -->
+  <h2 data-reactive="true" data-effects="drift,scale,weight">Upcoming Events</h2>
+
+  <p>Move your mouse over the headings. Click anywhere near them. Scroll away and back. Or just wait — idle chars get nudged every few seconds.</p>
+  <p>Body text is left alone: only <code>[data-reactive="true"]</code> elements are animated.</p>
+
+  <div class="controls">
+    <button onclick="textEffects.randomise(3)">Randomise 3</button>
+    <button onclick="toggleEffect('blur')">Toggle blur</button>
+    <button onclick="toggleEffect('flash')">Toggle flash</button>
+    <button onclick="toggleEffect('weight')">Toggle weight</button>
+    <button onclick="addSpin()">Add spin effect</button>
+    <button onclick="textEffects.removeEffect('spin')">Remove spin</button>
+  </div>
+
+  <script src="../textEffects.js"></script>
+  <script>
+    textEffects.init();
+
+    function toggleEffect(name) {
+      var effects = textEffects.effects;
+      if (effects[name]) {
+        textEffects.removeEffect(name);
+      } else {
+        // Re-add from defaults — in a real project you'd keep a reference
+        var defaults = {
+          blur:   { name:'blur',   duration:200, apply:function(el){el.classList.add('char-blur')},   remove:function(el){el.classList.remove('char-blur')} },
+          flash:  { name:'flash',  duration:350, apply:function(el){
+            var c=['var(--colour-accent)','var(--colour-accent-alt)','var(--colour-flash-red)'];
+            el.style.color=c[Math.floor(Math.random()*c.length)];
+          }, remove:function(el){el.style.color=''} },
+          weight: { name:'weight', duration:300, apply:function(el){el.classList.add('char-weight')}, remove:function(el){el.classList.remove('char-weight')} },
+        };
+        if (defaults[name]) textEffects.addEffect(defaults[name]);
+      }
+    }
+
+    function addSpin() {
+      textEffects.addEffect({
+        name: 'spin',
+        duration: 500,
+        apply:  function(el) { el.style.display='inline-block'; el.style.transition='transform .4s ease'; el.style.transform='rotate(360deg)'; },
+        remove: function(el) { el.style.transform=''; },
+      });
+    }
+  </script>
+
+</body>
+</html>
