@@ -2,7 +2,7 @@
   if (typeof module !== 'undefined' && typeof module.exports !== 'undefined') {
     module.exports = factory();
   } else {
-    root.textEffects = factory();
+    root.jelly = factory();
   }
 }(typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : this, function () {
 
@@ -63,10 +63,10 @@
   // ─── Style injection ────────────────────────────────────────────────────────
 
   function injectStyles() {
-    if (document.getElementById('text-effects-css')) return;
+    if (document.getElementById('jelly-css')) return;
     const s = document.createElement('style');
-    s.id = 'text-effects-css';
-    s.textContent = '.char{display:inline-block;will-change:transform}.word{white-space:nowrap}';
+    s.id = 'jelly-css';
+    s.textContent = '.jelly-char{display:inline-block;will-change:transform}.jelly-word{white-space:nowrap}';
     document.head.appendChild(s);
   }
 
@@ -76,10 +76,10 @@
   // (links inside headings, <strong> inside paragraphs, etc.).
 
   function clearSplits() {
-    document.querySelectorAll('.char').forEach(span => {
+    document.querySelectorAll('.jelly-char').forEach(span => {
       span.replaceWith(document.createTextNode(span.textContent ?? ''));
     });
-    document.querySelectorAll('.word').forEach(span => {
+    document.querySelectorAll('.jelly-word').forEach(span => {
       const frag = document.createDocumentFragment();
       while (span.firstChild) frag.appendChild(span.firstChild);
       span.replaceWith(frag);
@@ -88,7 +88,7 @@
   }
 
   function splitElement(el) {
-    if (el.querySelector('.char')) return;
+    if (el.querySelector('.jelly-char')) return;
     if (!(el.textContent ?? '').trim()) return;
 
     const textNodes = [];
@@ -96,7 +96,7 @@
       acceptNode(node) {
         const parent = node.parentElement;
         if (!parent) return NodeFilter.FILTER_REJECT;
-        if (parent.closest('.char, code, pre, script, style, svg, input, textarea, select'))
+        if (parent.closest('.jelly-char, code, pre, script, style, svg, input, textarea, select'))
           return NodeFilter.FILTER_REJECT;
         if (!(node.textContent ?? '').trim()) return NodeFilter.FILTER_SKIP;
         return NodeFilter.FILTER_ACCEPT;
@@ -116,11 +116,11 @@
         } else {
           if (!wordSpan) {
             wordSpan = document.createElement('span');
-            wordSpan.className = 'word';
+            wordSpan.className = 'jelly-word';
             frag.appendChild(wordSpan);
           }
           const span = document.createElement('span');
-          span.className = 'char';
+          span.className = 'jelly-char';
           span.textContent = ch;
           wordSpan.appendChild(span);
         }
@@ -132,7 +132,7 @@
   function splitAll() {
     clearSplits();
     document.querySelectorAll(cfg.selector).forEach(splitElement);
-    allChars   = Array.from(document.querySelectorAll('.char'));
+    allChars   = Array.from(document.querySelectorAll('.jelly-char'));
     charStates = allChars.map(makeState);
     cacheRects();
   }
@@ -145,7 +145,7 @@
 
     document.querySelectorAll(cfg.selector).forEach(splitElement);
 
-    const newChars = Array.from(document.querySelectorAll('.char'));
+    const newChars = Array.from(document.querySelectorAll('.jelly-char'));
     const stateMap = new Map();
     allChars.forEach((el, i) => stateMap.set(el, charStates[i]));
 

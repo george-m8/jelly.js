@@ -20,18 +20,18 @@ interface InertiaOptions {
   decay?:     number
 }
 
-interface TextEffectsOptions {
+interface JellyOptions {
   selector?:  string
   proximity?: ProximityOptions
   ripple?:    RippleOptions
   inertia?:   InertiaOptions
 }
 
-interface TextEffects {
-  init(options?: TextEffectsOptions): void
+interface Jelly {
+  init(options?: JellyOptions): void
   cleanup(): void
-  configure(options: Omit<TextEffectsOptions, 'selector'>): void
+  configure(options: Omit<JellyOptions, 'selector'>): void
 }
 
-declare const textEffects: TextEffects
-export = textEffects
+declare const jelly: Jelly
+export = jelly

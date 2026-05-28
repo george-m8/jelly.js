@@ -1,15 +1,15 @@
 /*
-  textEffects — character styles
-  ──────────────────────────────
+  jelly — character styles
+  ─────────────────────────
   The JS library injects an identical <style> block automatically, so this
   file is optional — useful if you want to customise transitions project-wide.
 */
 
-.char {
+.jelly-char {
   display: inline-block;
   will-change: transform;
 }
 
-.word {
+.jelly-word {
   white-space: nowrap;
 }
