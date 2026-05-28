@@ -1,288 +1,433 @@
-(function (global) {
+(function (root, factory) {
+  if (typeof module !== 'undefined' && typeof module.exports !== 'undefined') {
+    module.exports = factory();
+  } else {
+    root.textEffects = factory();
+  }
+}(typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : this, function () {
 
-  // ─── Effect pool ───────────────────────────────────────────────────────────
-  //
-  // Each effect is an object:
-  //   { name: string, duration: ms, apply: fn(el), remove: fn(el) }
-  //
-  // apply() and remove() do whatever you want — add a class, set inline style,
-  // anything. The library handles the timing and active-char guard.
-  //
-  // Edit, add, or remove effects here. To change just one effect at runtime:
-  //   textEffects.addEffect({ name: 'weight', duration: 200, apply: ..., remove: ... })
-  // To kill an effect entirely:
-  //   textEffects.removeEffect('blur')
+  // ─── Config ────────────────────────────────────────────────────────────────
+  // Override any of these via init(options) or configure(options).
 
-  var DEFAULT_EFFECTS = [
-    {
-      name: 'weight',
-      duration: 300,
-      apply:  function(el) { el.classList.add('char-weight'); },
-      remove: function(el) { el.classList.remove('char-weight'); },
-    },
-    {
-      name: 'drift',
-      duration: 400,
-      apply:  function(el) { el.classList.add('char-drift'); },
-      remove: function(el) { el.classList.remove('char-drift'); },
-    },
-    {
-      name: 'shadow',
-      duration: 500,
-      apply:  function(el) { el.classList.add('char-shadow'); },
-      remove: function(el) { el.classList.remove('char-shadow'); },
-    },
-    {
-      name: 'flash',
-      duration: 350,
-      apply: function(el) {
-        var colours = [
-          'var(--colour-accent,     #e81010)',
-          'var(--colour-accent-alt, #ff4040)',
-          'var(--colour-flash-red,  #ff3e3e)',
-        ];
-        el.style.color = colours[Math.floor(Math.random() * colours.length)];
-      },
-      remove: function(el) { el.style.color = ''; },
-    },
-    {
-      name: 'blur',
-      duration: 200,
-      apply:  function(el) { el.classList.add('char-blur'); },
-      remove: function(el) { el.classList.remove('char-blur'); },
-    },
-    {
-      name: 'scale',
-      duration: 250,
-      apply:  function(el) { el.classList.add('char-scale'); },
-      remove: function(el) { el.classList.remove('char-scale'); },
-    },
-  ];
+  const cfg = {
+    selector: '[data-reactive="true"]',
 
-  // ─── Internals ─────────────────────────────────────────────────────────────
+    proximity: {
+      radius:       150,   // px — mouse influence radius
+      pushStrength:  20,   // max px displacement at cursor centre
+      scaleRange:   0.18,  // chars shrink by this fraction at cursor centre
+      stiffness:    0.10,  // spring stiffness
+      damping:      0.72,  // velocity damping
+    },
 
-  var effectPool = {};
-  DEFAULT_EFFECTS.forEach(function(e) { effectPool[e.name] = e; });
+    ripple: {
+      waveSpeed:    1.0,   // px/ms — ripple expansion speed
+      maxRadius:   400,    // px — ripple fades out beyond this
+      liftStrength:  16,   // peak upward velocity kick (px/frame)
+      stiffness:    0.05,  // spring pulling char back to rest
+      damping:      0.80,  // ripple damping
+    },
 
-  var allChars      = [];
-  var activeChars   = new Set();
-  var isListening   = false;
-  var rafPending    = false;
-  var idleTimer     = null;
-  var observer      = null;
+    inertia: {
+      strength:   0.30,    // scroll-velocity multiplier
+      maxOffset:   25,     // px cap
+      decay:       0.86,   // per-frame decay factor
+    },
+  };
+
+  // ─── State ─────────────────────────────────────────────────────────────────
+
+  // Off-screen until first mousemove/touch, and reset on each navigation to
+  // prevent stale touch position from the previous page ghosting on mobile.
+  let mouseX = -9999;
+  let mouseY = -9999;
+
+  let allChars   = [];
+  let charStates = [];
+  let charRects  = [];
+
+  let lastScrollY   = 0;
+  let lastScrollT   = 0;
+  let scrollOriginX = null;
+
+  let rafId       = null;
+  let resizeTimer = null;
+  let isListening = false;
+
+  const REST = 0.01;
+
+  function makeState() {
+    return { cx:0, cy:0, cs:1, vx:0, vy:0, vs:0, ry:0, rvy:0, iy:0, wasMoving:false };
+  }
+
+  // ─── Style injection ────────────────────────────────────────────────────────
 
   function injectStyles() {
     if (document.getElementById('text-effects-css')) return;
-    var s = document.createElement('style');
+    const s = document.createElement('style');
     s.id = 'text-effects-css';
-    s.textContent = [
-      '.char{display:inline-block;transition:font-weight .15s ease,transform .15s ease,text-shadow .2s ease,color .2s ease,filter .15s ease}',
-      '.char-weight{font-weight:900}',
-      '.char-drift{transform:translateY(-4px)}',
-      '.char-shadow{text-shadow:0 0 12px var(--colour-accent,#e81010)}',
-      '.char-blur{filter:blur(1.5px)}',
-      '.char-scale{transform:scale(1.2)}',
-    ].join('');
+    s.textContent = '.char{display:inline-block;will-change:transform}.word{white-space:nowrap}';
     document.head.appendChild(s);
   }
 
-  function getPool(el) {
-    var attr = el.dataset && el.dataset.effects;
-    if (!attr) return Object.values(effectPool);
-    var names = attr.split(',').map(function(s) { return s.trim(); });
-    var pool = names.map(function(n) { return effectPool[n]; }).filter(Boolean);
-    return pool.length ? pool : Object.values(effectPool);
-  }
+  // ─── DOM splitting ──────────────────────────────────────────────────────────
+  //
+  // Uses TreeWalker to find text nodes without destroying nested structure
+  // (links inside headings, <strong> inside paragraphs, etc.).
 
-  function triggerEffect(el) {
-    if (activeChars.has(el)) return;
-    var pool = getPool(el);
-    if (!pool.length) return;
-    var effect = pool[Math.floor(Math.random() * pool.length)];
-    activeChars.add(el);
-    effect.apply(el);
-    setTimeout(function() {
-      effect.remove(el);
-      activeChars.delete(el);
-    }, effect.duration);
-  }
-
-  function triggerRandom(count, chars) {
-    var src = chars || allChars;
-    if (!src.length) return;
-    var shuffled = src.slice().sort(function() { return Math.random() - 0.5; });
-    shuffled.slice(0, count).forEach(triggerEffect);
-  }
-
-  function splitChars() {
-    var reactiveEls = document.querySelectorAll('[data-reactive="true"]');
-    Array.prototype.forEach.call(reactiveEls, function(el) {
-      if (el.querySelector('.char')) return;
-      var effectAttr = el.dataset && el.dataset.effects;
-      var text = el.textContent || '';
-      el.textContent = '';
-      text.split('').forEach(function(char) {
-        var span = document.createElement('span');
-        span.className = 'char';
-        span.textContent = char === ' ' ? ' ' : char;
-        if (effectAttr) span.dataset.effects = effectAttr;
-        el.appendChild(span);
-      });
+  function clearSplits() {
+    document.querySelectorAll('.char').forEach(span => {
+      span.replaceWith(document.createTextNode(span.textContent ?? ''));
     });
-    allChars = Array.prototype.slice.call(document.querySelectorAll('.char'));
+    document.querySelectorAll('.word').forEach(span => {
+      const frag = document.createDocumentFragment();
+      while (span.firstChild) frag.appendChild(span.firstChild);
+      span.replaceWith(frag);
+    });
+    document.querySelectorAll(cfg.selector).forEach(el => el.normalize());
   }
 
-  function setupObserver() {
-    if (observer) observer.disconnect();
-    if (!('IntersectionObserver' in window)) return;
-    var sections = Array.prototype.slice.call(
-      document.querySelectorAll('[data-reactive="true"]')
-    );
-    if (!sections.length) return;
-    observer = new IntersectionObserver(function(entries) {
-      entries.forEach(function(entry) {
-        if (!entry.isIntersecting) return;
-        var chars = Array.prototype.slice.call(
-          entry.target.querySelectorAll('.char')
-        );
-        chars.forEach(function(char, i) {
-          setTimeout(function() { triggerEffect(char); }, i * 40);
-        });
-        observer.unobserve(entry.target);
-      });
-    }, { threshold: 0.3 });
-    sections.forEach(function(el) { observer.observe(el); });
+  function splitElement(el) {
+    if (el.querySelector('.char')) return;
+    if (!(el.textContent ?? '').trim()) return;
+
+    const textNodes = [];
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        if (parent.closest('.char, code, pre, script, style, svg, input, textarea, select'))
+          return NodeFilter.FILTER_REJECT;
+        if (!(node.textContent ?? '').trim()) return NodeFilter.FILTER_SKIP;
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    let node;
+    while ((node = walker.nextNode())) textNodes.push(node);
+
+    textNodes.forEach(textNode => {
+      const text = textNode.textContent ?? '';
+      const frag = document.createDocumentFragment();
+      let wordSpan = null;
+      for (const ch of text) {
+        if (/\s/.test(ch)) {
+          wordSpan = null;
+          frag.appendChild(document.createTextNode(ch));
+        } else {
+          if (!wordSpan) {
+            wordSpan = document.createElement('span');
+            wordSpan.className = 'word';
+            frag.appendChild(wordSpan);
+          }
+          const span = document.createElement('span');
+          span.className = 'char';
+          span.textContent = ch;
+          wordSpan.appendChild(span);
+        }
+      }
+      textNode.parentNode?.replaceChild(frag, textNode);
+    });
   }
 
-  function resetIdle() {
-    if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(function() {
-      if (allChars.length) triggerRandom(1);
-    }, 4000);
+  function splitAll() {
+    clearSplits();
+    document.querySelectorAll(cfg.selector).forEach(splitElement);
+    allChars   = Array.from(document.querySelectorAll('.char'));
+    charStates = allChars.map(makeState);
+    cacheRects();
   }
+
+  // Re-scan after client-side navigation: split new elements, preserve existing
+  // physics state for chars still in the DOM (e.g. persistent header/footer).
+  function rescan() {
+    mouseX = -9999;
+    mouseY = -9999;
+
+    document.querySelectorAll(cfg.selector).forEach(splitElement);
+
+    const newChars = Array.from(document.querySelectorAll('.char'));
+    const stateMap = new Map();
+    allChars.forEach((el, i) => stateMap.set(el, charStates[i]));
+
+    allChars   = newChars;
+    charStates = newChars.map(el => stateMap.get(el) ?? makeState());
+    cacheRects();
+  }
+
+  function cacheRects() {
+    const sx = window.pageXOffset;
+    const sy = window.pageYOffset;
+    // Cache element bounding rects so getBoundingClientRect is called once per
+    // heading/link element, not once per character inside it.
+    const elCache = new Map();
+
+    charRects = allChars.map(el => {
+      const r         = el.getBoundingClientRect();
+      const inertiaEl = el.closest('h1,h2,h3,h4,h5,h6,a');
+
+      let elLeft  = r.left + r.width / 2 + sx;
+      let elRight = elLeft;
+      if (inertiaEl) {
+        if (!elCache.has(inertiaEl)) elCache.set(inertiaEl, inertiaEl.getBoundingClientRect());
+        const pr = elCache.get(inertiaEl);
+        elLeft   = pr.left  + sx;
+        elRight  = pr.right + sx;
+      }
+
+      return {
+        x:       r.left + r.width  / 2 + sx,
+        y:       r.top  + r.height / 2 + sy,
+        h:       r.height,
+        inertia: !!inertiaEl,
+        elLeft,
+        elRight,
+      };
+    });
+  }
+
+  // ─── Physics loop ───────────────────────────────────────────────────────────
+
+  function proximityTick() {
+    const { proximity: p, ripple: rp, inertia: id } = cfg;
+    const r2 = p.radius * p.radius;
+    const sx = window.pageXOffset;
+    const sy = window.pageYOffset;
+    const vh = window.innerHeight;
+
+    for (let i = 0; i < allChars.length; i++) {
+      const el    = allChars[i];
+      const rect  = charRects[i];
+      const state = charStates[i];
+
+      // Viewport cull — skip chars far outside visible area, but still decay inertia
+      const viewY = rect.y - sy;
+      if (viewY < -300 || viewY > vh + 300) {
+        if (state.iy !== 0) { state.iy *= id.decay; if (Math.abs(state.iy) < REST) state.iy = 0; }
+        continue;
+      }
+
+      // ── Mouse proximity spring ────────────────────────────────────────────
+      const dx    = (rect.x - sx) - mouseX;
+      const dy    = (rect.y - sy) - mouseY;
+      const dist2 = dx * dx + dy * dy;
+      let tx = 0, ty = 0, ts = 1;
+
+      if (dist2 < r2 && dist2 > 0.01) {
+        const dist       = Math.sqrt(dist2);
+        const t          = 1 - dist / p.radius;
+        const falloff    = t * t;                  // quadratic: gentle at edge, strong at centre
+        const sizeFactor = Math.max(0.25, Math.min(1.5, rect.h / 32));
+        tx = (dx / dist) * p.pushStrength * falloff * sizeFactor;
+        ty = (dy / dist) * p.pushStrength * falloff * sizeFactor;
+        ts = 1 - p.scaleRange * falloff * sizeFactor;
+      }
+
+      state.vx = (state.vx + (tx - state.cx) * p.stiffness) * p.damping;
+      state.vy = (state.vy + (ty - state.cy) * p.stiffness) * p.damping;
+      state.vs = (state.vs + (ts - state.cs) * p.stiffness) * p.damping;
+      state.cx += state.vx;
+      state.cy += state.vy;
+      state.cs += state.vs;
+
+      // ── Ripple spring (returns to 0) ──────────────────────────────────────
+      state.rvy = (state.rvy + (0 - state.ry) * rp.stiffness) * rp.damping;
+      state.ry += state.rvy;
+      if (Math.abs(state.ry) < REST && Math.abs(state.rvy) < REST) {
+        state.ry = 0; state.rvy = 0;
+      }
+
+      // ── Scroll inertia (pure decay) ───────────────────────────────────────
+      state.iy *= id.decay;
+      if (Math.abs(state.iy) < REST) state.iy = 0;
+
+      // ── Write transform — skip if fully at rest (avoids redundant style writes)
+      const atRest = Math.abs(state.cx) < REST
+                  && Math.abs(state.cy) < REST
+                  && Math.abs(state.cs - 1) < REST
+                  && state.ry === 0
+                  && state.iy === 0;
+
+      if (!atRest || state.wasMoving) {
+        const fy = state.cy + state.ry + state.iy;
+        el.style.transform = `translate(${state.cx.toFixed(2)}px,${fy.toFixed(2)}px) scale(${state.cs.toFixed(4)})`;
+        state.wasMoving = !atRest;
+      }
+    }
+
+    rafId = requestAnimationFrame(proximityTick);
+  }
+
+  // ─── Ripple ─────────────────────────────────────────────────────────────────
+
+  function triggerRipple(tapX, tapY) {
+    const { ripple: rp } = cfg;
+    const sx = window.pageXOffset;
+    const sy = window.pageYOffset;
+
+    allChars.forEach((_, i) => {
+      const rect  = charRects[i];
+      const state = charStates[i];
+      const dx    = (rect.x - sx) - tapX;
+      const dy    = (rect.y - sy) - tapY;
+      const dist  = Math.sqrt(dx * dx + dy * dy);
+      if (dist > rp.maxRadius) return;
+      const delay      = dist / rp.waveSpeed;
+      const strength   = 1 - dist / rp.maxRadius;
+      const sizeFactor = Math.max(0.25, Math.min(1.5, rect.h / 32));
+      setTimeout(() => { state.rvy -= rp.liftStrength * strength * sizeFactor; }, delay);
+    });
+  }
+
+  // ─── Scroll inertia ─────────────────────────────────────────────────────────
+
+  function onScroll() {
+    const now = performance.now();
+    const sy  = window.pageYOffset;
+    const sx  = window.pageXOffset;
+    const dt  = Math.max(now - lastScrollT, 1);
+    const vel = (sy - lastScrollY) / dt * 16;   // normalise to ~60fps
+    lastScrollY = sy;
+    lastScrollT = now;
+
+    const { inertia: id } = cfg;
+    const rawImpulse = vel * id.strength;
+    // Default origin to viewport centre on first scroll (before any mouse/touch event)
+    const originX = scrollOriginX ?? window.innerWidth / 2;
+
+    // Per-element tilt: within each heading/link, the character closest to the
+    // cursor gets 1% inertia and the furthest character gets 100%. The range is
+    // normalised to the element's own width so a narrow link and a wide heading
+    // get the same full spread.
+    charStates.forEach((s, i) => {
+      const rect = charRects[i];
+      if (!rect.inertia) return;
+
+      const sizeFactor = Math.max(0.25, Math.min(1.5, rect.h / 32));
+      const charViewX  = rect.x      - sx;
+      const elLeftV    = rect.elLeft  - sx;
+      const elRightV   = rect.elRight - sx;
+
+      const maxDist  = Math.max(Math.abs(elLeftV - originX), Math.abs(elRightV - originX));
+      const charDist = Math.abs(charViewX - originX);
+      const xFactor  = maxDist < 1 ? 0.01 : 0.01 + 0.99 * Math.min(1, charDist / maxDist);
+
+      const impulse  = Math.max(-id.maxOffset, Math.min(id.maxOffset, rawImpulse * sizeFactor * xFactor));
+      s.iy = Math.max(-id.maxOffset, Math.min(id.maxOffset, s.iy + impulse));
+    });
+  }
+
+  // ─── Event handlers ─────────────────────────────────────────────────────────
 
   function onMouseMove(e) {
-    if (rafPending) return;
-    rafPending = true;
-    requestAnimationFrame(function() {
-      rafPending = false;
-      resetIdle();
-      var nearby = allChars.filter(function(el) {
-        var r = el.getBoundingClientRect();
-        var dx = (r.left + r.width  / 2) - e.clientX;
-        var dy = (r.top  + r.height / 2) - e.clientY;
-        return Math.sqrt(dx * dx + dy * dy) < 80;
-      });
-      if (nearby.length) triggerRandom(1 + Math.floor(Math.random() * 3), nearby);
-    });
+    mouseX = e.clientX;
+    mouseY = e.clientY;
+    scrollOriginX = e.clientX;
+  }
+
+  // On touch devices there is no persistent cursor, so proximity tracks the
+  // active finger and disappears the moment it lifts.
+  function onTouchMove(e) {
+    mouseX = e.touches[0].clientX;
+    mouseY = e.touches[0].clientY;
+  }
+
+  function onTouchEnd() {
+    mouseX = -9999;
+    mouseY = -9999;
   }
 
   function onPointerDown(e) {
-    resetIdle();
-    var x = e.touches ? e.touches[0].clientX : e.clientX;
-    var y = e.touches ? e.touches[0].clientY : e.clientY;
-    var radius = 80 + Math.random() * 60;
-    var nearby = allChars.filter(function(el) {
-      var r = el.getBoundingClientRect();
-      var dx = (r.left + r.width  / 2) - x;
-      var dy = (r.top  + r.height / 2) - y;
-      return Math.sqrt(dx * dx + dy * dy) < radius;
-    });
-    triggerRandom(5 + Math.floor(Math.random() * 4), nearby.length ? nearby : allChars);
+    const x = e.touches ? e.touches[0].clientX : e.clientX;
+    const y = e.touches ? e.touches[0].clientY : e.clientY;
+    scrollOriginX = x;
+    // Ripple only fires on link/button interactions — feels more natural than
+    // triggering on every tap anywhere on the page.
+    const target = e.target?.closest('a, button, [role="button"], input[type="submit"], input[type="button"]');
+    if (!target) return;
+    triggerRipple(x, y);
   }
 
-  function attachListeners() {
-    document.addEventListener('mousemove',  onMouseMove);
-    document.addEventListener('click',      onPointerDown);
-    document.addEventListener('touchstart', onPointerDown);
+  function onResize() {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(cacheRects, 100);
   }
 
-  function detachListeners() {
-    document.removeEventListener('mousemove',  onMouseMove);
-    document.removeEventListener('click',      onPointerDown);
-    document.removeEventListener('touchstart', onPointerDown);
-  }
-
-  // ─── Public API ────────────────────────────────────────────────────────────
+  // ─── Public API ─────────────────────────────────────────────────────────────
 
   /**
    * textEffects.init(options?)
    *
-   * Find [data-reactive="true"] elements, split them into .char spans, attach
-   * all event listeners, and start the idle nudge timer. Safe to call again
-   * after a page navigation — already-split elements are skipped.
+   * Find [data-reactive="true"] elements, split into .char spans, start the
+   * physics loop, and attach all event listeners. Safe to call again after a
+   * client-side navigation — already-split elements are skipped.
    *
-   * options.selector  {string}   — override '[data-reactive="true"]' (future use)
+   * options.selector  {string}  — CSS selector for reactive elements
+   * options.proximity {object}  — { radius, pushStrength, scaleRange, stiffness, damping }
+   * options.ripple    {object}  — { waveSpeed, maxRadius, liftStrength, stiffness, damping }
+   * options.inertia   {object}  — { strength, maxOffset, decay }
    */
   function init(options) {
+    if (options) {
+      if (options.selector)  cfg.selector = options.selector;
+      if (options.proximity) Object.assign(cfg.proximity, options.proximity);
+      if (options.ripple)    Object.assign(cfg.ripple,    options.ripple);
+      if (options.inertia)   Object.assign(cfg.inertia,   options.inertia);
+    }
+
     injectStyles();
-    splitChars();
-    setupObserver();
-    resetIdle();
+
     if (!isListening) {
-      attachListeners();
+      splitAll();
+      rafId = requestAnimationFrame(proximityTick);
+      document.addEventListener('mousemove',  onMouseMove,  { passive: true });
+      document.addEventListener('click',      onPointerDown, { passive: true });
+      document.addEventListener('touchstart', onPointerDown, { passive: true });
+      document.addEventListener('touchmove',  onTouchMove,  { passive: true });
+      document.addEventListener('touchend',   onTouchEnd,   { passive: true });
+      window.addEventListener('scroll',       onScroll,     { passive: true });
+      window.addEventListener('resize',       onResize,     { passive: true });
       isListening = true;
+    } else {
+      rescan();
     }
   }
 
   /**
    * textEffects.cleanup()
    *
-   * Remove all listeners and observers. Call before tearing down the page.
+   * Cancel the animation loop and remove all listeners. Call before tearing
+   * down the page (or in a framework's unmount/cleanup hook).
    */
   function cleanup() {
-    detachListeners();
-    if (observer) { observer.disconnect(); observer = null; }
-    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+    if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+    document.removeEventListener('mousemove',  onMouseMove);
+    document.removeEventListener('click',      onPointerDown);
+    document.removeEventListener('touchstart', onPointerDown);
+    document.removeEventListener('touchmove',  onTouchMove);
+    document.removeEventListener('touchend',   onTouchEnd);
+    window.removeEventListener('scroll',       onScroll);
+    window.removeEventListener('resize',       onResize);
+    if (resizeTimer) { clearTimeout(resizeTimer); resizeTimer = null; }
     isListening = false;
-    allChars = [];
-    activeChars.clear();
-    rafPending = false;
+    allChars    = [];
+    charStates  = [];
+    charRects   = [];
   }
 
   /**
-   * textEffects.addEffect(effect)
+   * textEffects.configure(options)
    *
-   * Add or replace an effect in the pool.
-   * effect: { name, duration, apply(el), remove(el) }
+   * Adjust physics parameters at runtime without re-initialising.
    *
-   * Example — add a colour-invert effect:
-   *   textEffects.addEffect({
-   *     name: 'invert',
-   *     duration: 400,
-   *     apply:  el => el.style.filter = 'invert(1)',
-   *     remove: el => el.style.filter = '',
-   *   });
+   * Example:
+   *   textEffects.configure({ proximity: { pushStrength: 40, radius: 200 } });
    */
-  function addEffect(effect) {
-    effectPool[effect.name] = effect;
+  function configure(options) {
+    if (options.proximity) Object.assign(cfg.proximity, options.proximity);
+    if (options.ripple)    Object.assign(cfg.ripple,    options.ripple);
+    if (options.inertia)   Object.assign(cfg.inertia,   options.inertia);
   }
 
-  /**
-   * textEffects.removeEffect(name)
-   *
-   * Remove an effect from the pool by name.
-   */
-  function removeEffect(name) {
-    delete effectPool[name];
-  }
+  return { init, cleanup, configure };
 
-  /**
-   * textEffects.randomise(count?, chars?)
-   *
-   * Manually trigger random effects. Useful for custom interactions.
-   */
-  function randomise(count, chars) {
-    triggerRandom(count || 1, chars);
-  }
-
-  global.textEffects = {
-    init:         init,
-    cleanup:      cleanup,
-    addEffect:    addEffect,
-    removeEffect: removeEffect,
-    randomise:    randomise,
-    get effects() { return Object.assign({}, effectPool); },
-  };
-
-})(typeof window !== 'undefined' ? window : this);
+}));
