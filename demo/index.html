@@ -61,8 +61,32 @@
 
   <h2 data-reactive="true">Upcoming Events</h2>
 
-  <p>Move your mouse over the headings and links. Click a link to trigger a ripple. Scroll the page to see inertia on headings and links.</p>
-  <p>Body text is left alone — only <code>[data-reactive="true"]</code> elements are animated.</p>
+  <!-- data-jelly on any element adds it to the physics system as a whole unit -->
+  <svg data-jelly width="48" height="48" viewBox="0 0 48 48" fill="none" style="display:block;margin:2rem 0">
+    <circle cx="24" cy="24" r="20" stroke="#111" stroke-width="2"/>
+  </svg>
+
+  <!-- data-jelly-nodes: each direct child gets independent physics.
+       Shapes (rect, circle) are element-level. Paths get per-point deformation. -->
+  <div style="display:flex;gap:2rem;margin:2rem 0;align-items:center">
+    <!-- Instagram-style: 3 element-level nodes (rect + 2 circles) -->
+    <svg data-jelly-nodes width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="2" y="2" width="20" height="20" rx="5"/>
+      <circle cx="12" cy="12" r="5"/>
+      <circle cx="17.5" cy="6.5" r="1" fill="#111" stroke="none"/>
+    </svg>
+    <!-- TikTok-style: 1 complex path — per-point coordinate deformation -->
+    <svg data-jelly-nodes width="48" height="48" viewBox="0 0 24 24" fill="#111">
+      <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-2.88 2.5 2.89 2.89 0 0 1-2.89-2.89 2.89 2.89 0 0 1 2.89-2.89c.28 0 .54.04.79.1V9.01a6.34 6.34 0 0 0-.79-.05 6.34 6.34 0 0 0-6.34 6.34 6.34 6.34 0 0 0 6.34 6.34 6.34 6.34 0 0 0 6.33-6.34V8.69a8.28 8.28 0 0 0 4.84 1.55V6.79a4.85 4.85 0 0 1-1.07-.1z"/>
+    </svg>
+    <!-- Simple path: star shape -->
+    <svg data-jelly-nodes width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="#111" stroke-width="2">
+      <path d="M24 4 L28.5 16 L42 16 L31 24.5 L35 37 L24 29.5 L13 37 L17 24.5 L6 16 L19.5 16 Z"/>
+    </svg>
+  </div>
+
+  <p>Move your mouse over the headings, links, and icons above. Click a link to trigger a ripple. Scroll the page to see inertia.</p>
+  <p>Text: <code>[data-reactive="true"]</code>. Whole element: <code>[data-jelly]</code>. Per-node/per-point: <code>[data-jelly-nodes]</code>.</p>
 
   <div class="controls">
     <button onclick="jelly.configure({ proximity: { pushStrength: 40 } })">More repel</button>
