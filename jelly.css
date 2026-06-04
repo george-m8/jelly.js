@@ -7,7 +7,6 @@
 
 .jelly-char {
   display: inline-block;
-  will-change: transform;
 }
 
 .jelly-word {

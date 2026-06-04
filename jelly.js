@@ -65,11 +65,11 @@
     const s = document.createElement('style');
     s.id = 'jelly-css';
     s.textContent = [
-      '.jelly-char{display:inline-block;will-change:transform}',
+      '.jelly-char{display:inline-block}',
       '.jelly-word{white-space:nowrap}',
       // overflow:visible lets child elements and displaced path coords render outside the SVG viewBox
       '[data-jelly-nodes]{overflow:visible}',
-      '[data-jelly-nodes]>*{transform-box:fill-box;transform-origin:center;will-change:transform}',
+      '[data-jelly-nodes]>*{transform-box:fill-box;transform-origin:center}',
     ].join('');
     document.head.appendChild(s);
   }
@@ -385,9 +385,12 @@
                   && state.iy === 0;
 
       if (!atRest || state.wasMoving) {
+        const nowMoving = !atRest;
+        if (nowMoving && !state.wasMoving) el.style.willChange = 'transform';
         const fy = state.cy + state.ry + state.iy;
         el.style.transform = `translate(${state.cx.toFixed(2)}px,${fy.toFixed(2)}px) scale(${state.cs.toFixed(4)})`;
-        state.wasMoving = !atRest;
+        if (!nowMoving && state.wasMoving) el.style.willChange = 'auto';
+        state.wasMoving = nowMoving;
       }
     }
 
